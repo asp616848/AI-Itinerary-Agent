@@ -1,6 +1,6 @@
 const express = require("express");
 const cors = require("cors");
-const fetch = require("node-fetch"); // npm install node-fetch@2
+const fetch = require("node-fetch"); 
 const bodyParser = require("body-parser");
 
 const app = express();
