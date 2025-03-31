@@ -12,7 +12,12 @@ require('dotenv').config();  // This loads your .env file into process.env
 
 const serpApi = new SerpApi.GoogleSearch(process.env.SERP);
 
-app.use(cors());
+app.use(cors({
+  origin: "*", // Allow all origins (or set this to your React app URL)
+  methods: ["GET", "POST"],
+  allowedHeaders: ["Content-Type"]
+}));
+
 app.use(bodyParser.json());
 
 // Store chat histories by session ID
@@ -27,10 +32,21 @@ app.post("/generate", async (req, res) => {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        model: "llama3.1",
-        prompt: `Generate itinerary: ${JSON.stringify(requestBody)}`,
+          model: "llama3.1",
+          prompt: `You are an AI travel assistant. If the provided data is sufficient, generate a detailed itinerary based on the following input: ${JSON.stringify(requestBody)}. 
+
+Ensure your suggestions are accurate and up-to-date, highlighting the top attractions and activities at the specified destination.
+
+- Align and contextualize these recommendations with the user's stated preferences (e.g., if they prefer 'Hidden Gems,' focus on lesser-known but worthwhile experiences).
+- If the provided details are insufficient, ask relevant follow-up questions to personalize the itinerary further.
+
+At the end, include a follow-up question to refine the itinerary based on one of the following aspects:
+a. Dietary preferences.
+b. Specific interests within the given preferences.
+c. Walking tolerance or mobility concerns.
+d. Accommodation preferences (luxury, budget, central location, etc.).`
       }),
-    });
+  });
 
     if (!upstreamResponse.ok) {
       res
@@ -166,7 +182,6 @@ app.post("/chat", async (req, res) => {
     res.status(500).json({ error: "Internal server error" });
   }
 });
-
 
 // Helper function to detect if message is asking about flights
 function detectFlightSearchIntent(message) {
