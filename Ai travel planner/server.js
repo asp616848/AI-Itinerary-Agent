@@ -8,7 +8,6 @@ const app = express();
 const PORT = 5000;
 require('dotenv').config();  // This loads your .env file into process.env
 
-// Initialize SerpApi client
 
 const serpApi = new SerpApi.GoogleSearch(process.env.SERP);
 
