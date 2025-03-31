@@ -1,66 +1,80 @@
-from flask import Flask, request, jsonify
-from huggingface_hub import InferenceClient
-import os
-from dotenv import load_dotenv
+import requests
+from flask import Flask, request, jsonify, Response, session
 from flask_cors import CORS
-
-# Load environment variables
-load_dotenv()
+import json
 
 app = Flask(__name__)
+app.secret_key = "super_secret_key"  # Required for session handling
+app.config["SESSION_PERMANENT"] = False  # Prevents issues with temporary sessions
 CORS(app)  # Enable CORS for frontend integration
 
-HF_ACCESS_TOKEN = os.getenv("HF_ACCESS_TOKEN")
-if not HF_ACCESS_TOKEN:
-    raise ValueError("HF_ACCESS_TOKEN is missing. Please set it in your .env file.")
+OLLAMA_URL = "http://127.0.0.1:11434/api/generate"
+SYSTEM_PROMPT = "You are an AI travel assistant. Generate a detailed itinerary based on user input. in 60 words"
 
-client = InferenceClient(token=HF_ACCESS_TOKEN)
+def stream_itinerary(budget, duration, destination, purpose, preferences):
+    """Stream the response from Ollama and yield it as text chunks."""
+    user_prompt = f"Plan a {duration}-day trip to {destination} with a {budget} budget. Purpose: {purpose}. Preferences: {preferences}."
+    payload = {
+        "model": "llama3.1",
+        "prompt": SYSTEM_PROMPT + "\n" + user_prompt,
+        "stream": True  # Enable streaming
+    }
 
-SYSTEM_PROMPT = """
-You are an AI travel assistant that creates personalized travel itineraries based on user preferences. 
-Consider budget, duration, destination, purpose, address, and other preferences to generate a well-structured day-wise plan.
-Include activities, food recommendations, and relaxation options.
-If you need additional details from the user before finalizing, ask relevant follow-up questions.
-Format the response in markdown.
-"""
-
-def generate_itinerary(budget, duration, address, destination, purpose, preferences):
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": f"Plan a {duration}-day trip to {destination} with a {budget} budget. Purpose: {purpose}. Address: {address}. Preferences: {preferences}."}
-    ]
-    
     try:
-        response = client.chat_completion(
-            model="mistralai/Mixtral-8x7B-Instruct-v0.1",
-            messages=messages,
-            max_tokens=1024
-        )
-        output = response["choices"][0]["message"]["content"]
-        
-        # Check if the model is asking follow-up questions
-        if "[Follow-up]" in output:
-            return {"follow_up": output}
-        
-        return {"itinerary": output}
+        with requests.post(OLLAMA_URL, json=payload, stream=True) as response:
+            if response.status_code != 200:
+                yield f"Error: Ollama returned status {response.status_code}\n"
+                return
+
+            # Process each line as a separate JSON object
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                
+                try:
+                    # Parse each line as a separate JSON object
+                    parsed_line = json.loads(line)
+                    # Extract the response piece
+                    response_text = parsed_line.get("response", "")
+                    if response_text:
+                        yield response_text
+                    
+                    # Check if we're done
+                    if parsed_line.get("done", False):
+                        break
+                except json.JSONDecodeError as e:
+                    # Log the error and the problematic line
+                    print(f"Error parsing JSON: {str(e)}")
+                    print(f"Problematic line: {line}")
+                    # Just pass through the raw line if we can't parse it
+                    yield line + "\n"
     except Exception as e:
-        return {"error": f"Error generating itinerary: {str(e)}"}
+        yield f"Error fetching response: {str(e)}\n"
 
 @app.route("/generate", methods=["POST"])
 def generate():
     data = request.json
-    required_fields = ["budget", "duration", "address", "destination", "purpose", "preferences"]
+    required_fields = ["budget", "duration", "destination", "purpose", "preferences"]
 
-    # Validate input
-    if not all(field in data and data[field] for field in required_fields):
-        return jsonify({"error": "Missing required fields"}), 400
+    missing_fields = [field for field in required_fields if not data.get(field)]
+    if missing_fields:
+        return jsonify({
+            "error": f"Missing details: {', '.join(missing_fields)}",
+            "follow_up": f"Could you please provide more details on {', '.join(missing_fields)}?"
+        }), 400
 
-    itinerary_response = generate_itinerary(
-        data["budget"], data["duration"], data["address"],
-        data["destination"], data["purpose"], data["preferences"]
-    )
-
-    return jsonify(itinerary_response)
+    # Collect the entire response before returning it
+    try:
+        full_response = ""
+        for chunk in stream_itinerary(
+            data["budget"], data["duration"], data["destination"],
+            data["purpose"], data["preferences"]
+        ):
+            full_response += chunk
+        
+        return jsonify({"itinerary": full_response})
+    except Exception as e:
+        return jsonify({"itinerary": f"Error fetching response: {str(e)}"}), 500
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
